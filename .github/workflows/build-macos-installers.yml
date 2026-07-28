@@ -1,0 +1,65 @@
+name: Build macOS installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }} installer
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Intel
+            architecture: x86_64
+            artifact_name: TinyTroupe-macOS-Intel
+          - name: macOS Apple Silicon
+            architecture: arm64
+            artifact_name: TinyTroupe-macOS-Apple-Silicon
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show build environment
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build DMG installer
+        run: ./scripts/package-dmg.sh "${{ matrix.architecture }}"
+
+      - name: Verify installer
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+
+          installers=(dist/TinyTroupe-*-${{ matrix.architecture }}.dmg(N))
+          if (( ${#installers[@]} != 1 )); then
+            print -u2 "Expected exactly one DMG, found ${#installers[@]}"
+            exit 1
+          fi
+
+          hdiutil verify "${installers[1]}"
+          shasum -a 256 "${installers[1]}"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/TinyTroupe-*-${{ matrix.architecture }}.dmg
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

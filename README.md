@@ -46,6 +46,16 @@ local use. Omitting the architecture builds the Universal 2 app.
 This produces separate Apple Silicon and Intel installers. Pass `x86_64`,
 `arm64`, or `universal` to build only one variant.
 
+## GitHub Actions
+
+The `Build macOS installers` workflow builds two downloadable DMG artifacts:
+
+- `TinyTroupe-macOS-Intel` for Intel Macs (`x86_64`).
+- `TinyTroupe-macOS-Apple-Silicon` for M-series Macs (`arm64`).
+
+Run the workflow manually from the Actions page, or push a version tag such as
+`v1.5.0`. Artifacts are retained by GitHub Actions for 30 days.
+
 ## Test
 
 ```sh
