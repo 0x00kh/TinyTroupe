@@ -30,6 +30,19 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Validate release version
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        shell: zsh {0}
+        run: |
+          set -euo pipefail
+
+          app_version="$(plutil -extract CFBundleShortVersionString raw Packaging/Info.plist)"
+          expected_tag="v${app_version}"
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            print -u2 "Release tag $GITHUB_REF_NAME does not match app version $app_version (expected $expected_tag)"
+            exit 1
+          fi
+
       - name: Show build environment
         run: |
           swift --version
@@ -63,3 +76,51 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+  release:
+    name: Create GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: TinyTroupe-macOS-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          installers=(release-assets/*.dmg)
+          if [[ ${#installers[@]} -ne 2 ]]; then
+            echo "Expected exactly two DMG files, found ${#installers[@]}" >&2
+            exit 1
+          fi
+
+          printf '%s\n' "${installers[@]}"
+          sha256sum "${installers[@]}"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/*.dmg \
+              --title "TinyTroupe ${GITHUB_REF_NAME#v}" \
+              --generate-notes
+          fi

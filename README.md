@@ -53,8 +53,21 @@ The `Build macOS installers` workflow builds two downloadable DMG artifacts:
 - `TinyTroupe-macOS-Intel` for Intel Macs (`x86_64`).
 - `TinyTroupe-macOS-Apple-Silicon` for M-series Macs (`arm64`).
 
-Run the workflow manually from the Actions page, or push a version tag such as
-`v1.5.0`. Artifacts are retained by GitHub Actions for 30 days.
+Run the workflow manually from the Actions page to build artifacts without
+publishing a release. Artifacts are retained by GitHub Actions for 30 days.
+
+To publish a GitHub Release, push a version tag that matches
+`CFBundleShortVersionString` in `Packaging/Info.plist`. For example, version
+`1.5.0` must use tag `v1.5.0`:
+
+```sh
+git tag v1.5.0
+git push origin v1.5.0
+```
+
+After both architecture builds succeed, the workflow creates the matching
+GitHub Release, generates release notes, and attaches both DMG installers. If
+the release already exists, the workflow replaces its DMG assets.
 
 ## Test
 
