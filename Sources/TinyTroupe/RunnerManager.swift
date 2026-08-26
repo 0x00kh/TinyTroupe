@@ -30,7 +30,7 @@ final class RunnerManager: NSObject {
         }
         persistConfigurations()
         refreshAllMenus()
-        startAnimationTimer()
+        updateAnimationTimer()
     }
 
     var canRemoveRunner: Bool {
@@ -126,6 +126,7 @@ final class RunnerManager: NSObject {
         )
         persistConfigurations()
         refreshAllMenus()
+        updateAnimationTimer()
     }
 
     func removeRunner(id: UUID) {
@@ -139,6 +140,7 @@ final class RunnerManager: NSObject {
         controller.invalidate()
         persistConfigurations()
         refreshAllMenus()
+        updateAnimationTimer()
     }
 
     private func updateRunner(
@@ -153,6 +155,23 @@ final class RunnerManager: NSObject {
         mutation(&configuration)
         controller.apply(configuration)
         persistConfigurations()
+        updateAnimationTimer()
+    }
+
+    private func updateAnimationTimer() {
+        let hasRunningRunner = controllers.contains { $0.configuration.isRunning }
+
+        if hasRunningRunner {
+            guard animationTimer == nil else {
+                return
+            }
+
+            startAnimationTimer()
+            return
+        }
+
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
 
     private func startAnimationTimer() {
@@ -163,12 +182,17 @@ final class RunnerManager: NSObject {
             userInfo: nil,
             repeats: true
         )
-        RunLoop.main.add(timer, forMode: .common)
+        timer.tolerance = RunnerTimeline.frameDuration * 0.1
+        RunLoop.main.add(timer, forMode: .default)
         animationTimer = timer
     }
 
     @objc
     private func handleAnimationTick(_ timer: Timer) {
+        guard timer === animationTimer else {
+            return
+        }
+
         for controller in controllers {
             controller.advanceFrame()
         }

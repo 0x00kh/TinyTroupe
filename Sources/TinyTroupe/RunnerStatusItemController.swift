@@ -8,6 +8,7 @@ final class RunnerStatusItemController: NSObject {
 
     private weak var manager: RunnerManager?
     private let statusItem: NSStatusItem
+    private let imageView: PassthroughImageView
     private var frameIndex = 0
     private var launchAtLoginItem: NSMenuItem?
     private var openLoginItemsSettingsItem: NSMenuItem?
@@ -19,12 +20,13 @@ final class RunnerStatusItemController: NSObject {
         statusItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.variableLength
         )
+        imageView = PassthroughImageView(frame: .zero)
 
         super.init()
 
-        statusItem.button?.imagePosition = .imageOnly
-        statusItem.button?.imageScaling = .scaleProportionallyDown
+        configureImageView()
         updateImage()
+        updateToolTip()
         rebuildMenu()
     }
 
@@ -33,7 +35,9 @@ final class RunnerStatusItemController: NSObject {
             frameIndex = 0
         }
         self.configuration = configuration
+        updateStatusItemLength()
         updateImage()
+        updateToolTip()
         rebuildMenu()
     }
 
@@ -156,8 +160,39 @@ final class RunnerStatusItemController: NSObject {
         }
 
         frameIndex %= frames.count
-        statusItem.button?.image = frames[frameIndex]
+        imageView.image = frames[frameIndex]
+    }
+
+    private func updateToolTip() {
         statusItem.button?.toolTip = toolTip
+    }
+
+    private func configureImageView() {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        updateStatusItemLength()
+        button.image = nil
+        button.imagePosition = .noImage
+        button.title = ""
+
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(imageView)
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: button.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+        ])
+    }
+
+    private func updateStatusItemLength() {
+        let imageWidth = manager?.frames(for: configuration)
+            .map(\.size.width)
+            .max() ?? NSStatusItem.squareLength
+        statusItem.length = max(NSStatusItem.squareLength, imageWidth + 4)
     }
 
     private var toolTip: String {
@@ -248,6 +283,13 @@ final class RunnerStatusItemController: NSObject {
     @objc
     private func quitApplication() {
         NSApplication.shared.terminate(nil)
+    }
+}
+
+@MainActor
+private final class PassthroughImageView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }
 
