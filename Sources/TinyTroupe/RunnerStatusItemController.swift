@@ -8,7 +8,6 @@ final class RunnerStatusItemController: NSObject {
 
     private weak var manager: RunnerManager?
     private let statusItem: NSStatusItem
-    private let imageView: RunnerStatusItemView
     private var frameIndex = 0
     private var launchAtLoginItem: NSMenuItem?
     private var openLoginItemsSettingsItem: NSMenuItem?
@@ -20,7 +19,6 @@ final class RunnerStatusItemController: NSObject {
         statusItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.variableLength
         )
-        imageView = RunnerStatusItemView(frame: .zero)
         super.init()
 
         configureStatusItemButton()
@@ -159,7 +157,7 @@ final class RunnerStatusItemController: NSObject {
         }
 
         frameIndex %= frames.count
-        imageView.display(frames[frameIndex])
+        statusItem.button?.image = frames[frameIndex]
     }
 
     private func updateToolTip() {
@@ -172,18 +170,9 @@ final class RunnerStatusItemController: NSObject {
         }
 
         updateStatusItemLength()
-        button.image = nil
-        button.imagePosition = .noImage
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleProportionallyDown
         button.title = ""
-
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(imageView)
-        NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: button.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: button.bottomAnchor),
-        ])
     }
 
     private func updateStatusItemLength() {
@@ -281,98 +270,6 @@ final class RunnerStatusItemController: NSObject {
     @objc
     private func quitApplication() {
         NSApplication.shared.terminate(nil)
-    }
-}
-
-@MainActor
-private final class RunnerStatusItemView: NSView {
-    private let tintLayer = CALayer()
-    private let maskLayer = CALayer()
-    private var spriteSize = NSSize.zero
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-
-        wantsLayer = true
-        layerContentsRedrawPolicy = .never
-        maskLayer.magnificationFilter = .nearest
-        maskLayer.minificationFilter = .nearest
-        maskLayer.contentsGravity = .resize
-        tintLayer.mask = maskLayer
-        layer?.addSublayer(tintLayer)
-        updateTintColor()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func display(_ image: NSImage) {
-        guard let representation = image.representations
-            .compactMap({ $0 as? NSBitmapImageRep })
-            .first,
-              let contents = representation.cgImage
-        else {
-            return
-        }
-
-        // Update the mask directly so AppKit does not rasterize the status item image each frame.
-        if spriteSize != image.size {
-            spriteSize = image.size
-            updateLayerFrames()
-        }
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        maskLayer.contents = contents
-        maskLayer.contentsScale = max(
-            CGFloat(contents.width) / max(image.size.width, 1),
-            CGFloat(contents.height) / max(image.size.height, 1)
-        )
-        CATransaction.commit()
-    }
-
-    override func layout() {
-        super.layout()
-        updateLayerFrames()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateTintColor()
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
-    }
-
-    private func updateLayerFrames() {
-        let size = NSSize(
-            width: min(spriteSize.width, bounds.width),
-            height: min(spriteSize.height, bounds.height)
-        )
-        let frame = NSRect(
-            x: (bounds.width - size.width) / 2,
-            y: (bounds.height - size.height) / 2,
-            width: size.width,
-            height: size.height
-        ).integral
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        tintLayer.frame = frame
-        maskLayer.frame = tintLayer.bounds
-        CATransaction.commit()
-    }
-
-    private func updateTintColor() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            tintLayer.backgroundColor = NSColor.labelColor.cgColor
-            CATransaction.commit()
-        }
     }
 }
 
