@@ -14,6 +14,9 @@ final class RunnerStatusItemController: NSObject {
     private var currentImage: NSImage?
     private var stableRightInset: CGFloat?
     private var stableTopInset: CGFloat?
+    private var spaceRefreshWorkItem: DispatchWorkItem?
+    private var spaceRefreshGeneration = 0
+    private var suppressVisibilityRefresh = false
     private var frameIndex = 0
     private var launchAtLoginItem: NSMenuItem?
     private var openLoginItemsSettingsItem: NSMenuItem?
@@ -158,6 +161,8 @@ final class RunnerStatusItemController: NSObject {
     }
 
     func invalidate() {
+        spaceRefreshWorkItem?.cancel()
+        spaceRefreshWorkItem = nil
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         for window in spriteWindows.values {
@@ -230,10 +235,38 @@ final class RunnerStatusItemController: NSObject {
 
     @objc
     private func sourceGeometryDidChange(_ notification: Notification) {
-        updateSpriteWindowFrames()
+        if notification.name == NSWorkspace.activeSpaceDidChangeNotification {
+            suppressVisibilityRefresh = true
+            updateSpriteWindowFrames(updateVisibility: false)
+            scheduleSpaceRefresh()
+            return
+        }
+
+        updateSpriteWindowFrames(updateVisibility: !suppressVisibilityRefresh)
     }
 
-    private func updateSpriteWindowFrames() {
+    private func scheduleSpaceRefresh() {
+        spaceRefreshWorkItem?.cancel()
+        spaceRefreshGeneration += 1
+        let generation = spaceRefreshGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.spaceRefreshGeneration == generation
+            else {
+                return
+            }
+            self.suppressVisibilityRefresh = false
+            self.updateSpriteWindowFrames()
+        }
+        spaceRefreshWorkItem = workItem
+        // Window Server visibility can lag the active-Space notification.
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + 0.25,
+            execute: workItem
+        )
+    }
+
+    private func updateSpriteWindowFrames(updateVisibility: Bool = true) {
         guard let button = statusItem.button,
               let statusWindow = button.window
         else {
@@ -264,7 +297,9 @@ final class RunnerStatusItemController: NSObject {
         else {
             return
         }
-        let visibleMenuBarScreens = visibleMenuBarScreenNumbers()
+        let visibleMenuBarScreens = updateVisibility
+            ? visibleMenuBarScreenNumbers()
+            : nil
         var activeScreenNumbers = Set<NSNumber>()
 
         for screen in NSScreen.screens {
@@ -287,13 +322,16 @@ final class RunnerStatusItemController: NSObject {
             )
 
             window.setFrame(targetFrame, display: false)
-            if visibleMenuBarScreens.contains(screenNumber) {
-                window.orderFrontRegardless()
-            } else {
-                window.orderOut(nil)
-            }
             if let currentImage {
                 spriteView.display(currentImage)
+            }
+            if visibleMenuBarScreens?.contains(screenNumber) == true,
+               !window.isVisible {
+                window.orderFrontRegardless()
+            } else if visibleMenuBarScreens?.contains(screenNumber) == false,
+                      window.isOnActiveSpace,
+                      window.isVisible {
+                window.orderOut(nil)
             }
         }
 
@@ -325,10 +363,11 @@ final class RunnerStatusItemController: NSObject {
         )
         window.appearance = appearance
         window.backgroundColor = .clear
+        // Transient windows move with their Space instead of lingering over it.
         window.collectionBehavior = [
             .canJoinAllSpaces,
             .ignoresCycle,
-            .stationary,
+            .transient,
         ]
         window.contentView = spriteView
         window.hasShadow = false

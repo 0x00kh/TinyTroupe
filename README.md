@@ -85,11 +85,11 @@ Release。Artifacts 会保留 30 天，足够把它们领回家。
 
 发布版本时，先确认 `Packaging/Info.plist` 中的
 `CFBundleShortVersionString` 已经更新。Git 标签必须在版本号前加 `v`，并与
-它完全一致。例如应用版本为 `1.7.0`，标签就必须是 `v1.7.0`：
+它完全一致。例如应用版本为 `1.8.0`，标签就必须是 `v1.8.0`：
 
 ```sh
-git tag v1.7.0
-git push origin v1.7.0
+git tag v1.8.0
+git push origin v1.8.0
 ```
 
 标签推送后，GitHub Actions 会依次完成这些工作：
