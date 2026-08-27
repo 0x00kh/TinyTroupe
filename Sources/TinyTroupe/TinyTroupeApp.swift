@@ -5,6 +5,7 @@ import AppKit
 private enum TinyTroupeApp {
     static func main() {
         let application = NSApplication.shared
+        _ = application.setActivationPolicy(.accessory)
         let delegate = AppDelegate()
         application.delegate = delegate
         application.run()
@@ -17,7 +18,6 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
     private var runnerManager: RunnerManager?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        _ = NSApplication.shared.setActivationPolicy(.accessory)
         runnerManager = RunnerManager()
     }
 }
