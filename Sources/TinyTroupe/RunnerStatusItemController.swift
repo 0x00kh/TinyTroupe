@@ -8,7 +8,12 @@ final class RunnerStatusItemController: NSObject {
 
     private weak var manager: RunnerManager?
     private let statusItem: NSStatusItem
-    private let imageView: PassthroughImageView
+    private var spriteWindows: [NSNumber: NSWindow] = [:]
+    private var spriteViews: [NSNumber: RunnerSpriteView] = [:]
+    private weak var observedStatusWindow: NSWindow?
+    private var currentImage: NSImage?
+    private var stableRightInset: CGFloat?
+    private var stableTopInset: CGFloat?
     private var frameIndex = 0
     private var launchAtLoginItem: NSMenuItem?
     private var openLoginItemsSettingsItem: NSMenuItem?
@@ -20,14 +25,16 @@ final class RunnerStatusItemController: NSObject {
         statusItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.variableLength
         )
-        imageView = PassthroughImageView(frame: .zero)
-
         super.init()
 
-        configureImageView()
+        configureSpriteView()
         updateImage()
         updateToolTip()
         rebuildMenu()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.updateSpriteWindowFrames()
+        }
     }
 
     func apply(_ configuration: RunnerConfiguration) {
@@ -151,6 +158,13 @@ final class RunnerStatusItemController: NSObject {
     }
 
     func invalidate() {
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        for window in spriteWindows.values {
+            window.orderOut(nil)
+        }
+        spriteWindows.removeAll()
+        spriteViews.removeAll()
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -160,14 +174,18 @@ final class RunnerStatusItemController: NSObject {
         }
 
         frameIndex %= frames.count
-        imageView.image = frames[frameIndex]
+        let image = frames[frameIndex]
+        currentImage = image
+        for spriteView in spriteViews.values {
+            spriteView.display(image)
+        }
     }
 
     private func updateToolTip() {
         statusItem.button?.toolTip = toolTip
     }
 
-    private func configureImageView() {
+    private func configureSpriteView() {
         guard let button = statusItem.button else {
             return
         }
@@ -177,15 +195,26 @@ final class RunnerStatusItemController: NSObject {
         button.imagePosition = .noImage
         button.title = ""
 
-        imageView.imageScaling = .scaleProportionallyDown
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(imageView)
-        NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: button.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: button.bottomAnchor),
-        ])
+        button.postsFrameChangedNotifications = true
+        let center = NotificationCenter.default
+        center.addObserver(
+            self,
+            selector: #selector(sourceGeometryDidChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: button
+        )
+        center.addObserver(
+            self,
+            selector: #selector(sourceGeometryDidChange(_:)),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(sourceGeometryDidChange(_:)),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil
+        )
     }
 
     private func updateStatusItemLength() {
@@ -193,6 +222,214 @@ final class RunnerStatusItemController: NSObject {
             .map(\.size.width)
             .max() ?? NSStatusItem.squareLength
         statusItem.length = max(NSStatusItem.squareLength, imageWidth + 4)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.updateSpriteWindowFrames()
+        }
+    }
+
+    @objc
+    private func sourceGeometryDidChange(_ notification: Notification) {
+        updateSpriteWindowFrames()
+    }
+
+    private func updateSpriteWindowFrames() {
+        guard let button = statusItem.button,
+              let statusWindow = button.window
+        else {
+            return
+        }
+
+        observeStatusWindowIfNeeded(statusWindow)
+        let frameInWindow = button.convert(button.bounds, to: nil)
+        let sourceFrame = statusWindow.convertToScreen(frameInWindow)
+        if let sourceScreen = NSScreen.screens.first(where: {
+            $0.frame.contains(sourceFrame)
+        }) ?? statusWindow.screen,
+           sourceScreen.frame.contains(sourceFrame) {
+            let rightInset = sourceScreen.frame.maxX - sourceFrame.maxX
+            let topInset = sourceScreen.frame.maxY - sourceFrame.maxY
+            let maximumTopInset = NSStatusBar.system.thickness
+
+            if rightInset >= 0,
+               topInset >= 0,
+               topInset <= maximumTopInset {
+                stableRightInset = rightInset
+                stableTopInset = topInset
+            }
+        }
+
+        guard let rightInset = stableRightInset,
+              let topInset = stableTopInset
+        else {
+            return
+        }
+        let visibleMenuBarScreens = visibleMenuBarScreenNumbers()
+        var activeScreenNumbers = Set<NSNumber>()
+
+        for screen in NSScreen.screens {
+            guard let screenNumber = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? NSNumber else {
+                continue
+            }
+
+            activeScreenNumbers.insert(screenNumber)
+            let targetFrame = NSRect(
+                x: screen.frame.maxX - rightInset - sourceFrame.width,
+                y: screen.frame.maxY - topInset - sourceFrame.height,
+                width: sourceFrame.width,
+                height: sourceFrame.height
+            )
+            let (window, spriteView) = spriteWindow(
+                for: screenNumber,
+                appearance: button.effectiveAppearance
+            )
+
+            window.setFrame(targetFrame, display: false)
+            if visibleMenuBarScreens.contains(screenNumber) {
+                window.orderFrontRegardless()
+            } else {
+                window.orderOut(nil)
+            }
+            if let currentImage {
+                spriteView.display(currentImage)
+            }
+        }
+
+        let removedScreenNumbers = Set(spriteWindows.keys)
+            .subtracting(activeScreenNumbers)
+        for screenNumber in removedScreenNumbers {
+            spriteWindows.removeValue(forKey: screenNumber)?.orderOut(nil)
+            spriteViews.removeValue(forKey: screenNumber)
+        }
+    }
+
+    private func spriteWindow(
+        for screenNumber: NSNumber,
+        appearance: NSAppearance
+    ) -> (NSWindow, RunnerSpriteView) {
+        if let window = spriteWindows[screenNumber],
+           let spriteView = spriteViews[screenNumber] {
+            window.appearance = appearance
+            return (window, spriteView)
+        }
+
+        let spriteView = RunnerSpriteView(frame: .zero)
+        spriteView.autoresizingMask = [.width, .height]
+        let window = NSWindow(
+            contentRect: .zero,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.appearance = appearance
+        window.backgroundColor = .clear
+        window.collectionBehavior = [
+            .canJoinAllSpaces,
+            .ignoresCycle,
+            .stationary,
+        ]
+        window.contentView = spriteView
+        window.hasShadow = false
+        window.ignoresMouseEvents = true
+        window.isOpaque = false
+        window.isReleasedWhenClosed = false
+        window.level = NSWindow.Level(
+            rawValue: NSWindow.Level.statusBar.rawValue + 1
+        )
+
+        spriteWindows[screenNumber] = window
+        spriteViews[screenNumber] = spriteView
+        return (window, spriteView)
+    }
+
+    private func visibleMenuBarScreenNumbers() -> Set<NSNumber> {
+        guard let windowList = CGWindowListCopyWindowInfo(
+            .optionOnScreenOnly,
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+
+        let menuBarFrames = windowList.compactMap { window -> CGRect? in
+            guard window[kCGWindowLayer as String] as? Int
+                    == NSWindow.Level.mainMenu.rawValue,
+                  let bounds = window[kCGWindowBounds as String]
+            else {
+                return nil
+            }
+
+            return CGRect(dictionaryRepresentation: bounds as! CFDictionary)
+        }
+
+        return Set(NSScreen.screens.compactMap { screen -> NSNumber? in
+            guard let screenNumber = screenNumber(for: screen) else {
+                return nil
+            }
+
+            let displayBounds = CGDisplayBounds(
+                CGDirectDisplayID(screenNumber.uint32Value)
+            )
+            let hasVisibleMenuBar = menuBarFrames.contains { menuBarFrame in
+                abs(menuBarFrame.minX - displayBounds.minX) < 1
+                    && abs(menuBarFrame.minY - displayBounds.minY) < 1
+                    && abs(menuBarFrame.width - displayBounds.width) < 1
+                    && menuBarFrame.height <= 64
+            }
+            return hasVisibleMenuBar ? screenNumber : nil
+        })
+    }
+
+    private func screenNumber(for screen: NSScreen) -> NSNumber? {
+        screen.deviceDescription[
+            NSDeviceDescriptionKey("NSScreenNumber")
+        ] as? NSNumber
+    }
+
+    private func observeStatusWindowIfNeeded(_ statusWindow: NSWindow) {
+        guard observedStatusWindow !== statusWindow else {
+            return
+        }
+
+        let center = NotificationCenter.default
+        if let observedStatusWindow {
+            center.removeObserver(
+                self,
+                name: NSWindow.didMoveNotification,
+                object: observedStatusWindow
+            )
+            center.removeObserver(
+                self,
+                name: NSWindow.didResizeNotification,
+                object: observedStatusWindow
+            )
+            center.removeObserver(
+                self,
+                name: NSWindow.didChangeScreenNotification,
+                object: observedStatusWindow
+            )
+        }
+
+        observedStatusWindow = statusWindow
+        center.addObserver(
+            self,
+            selector: #selector(sourceGeometryDidChange(_:)),
+            name: NSWindow.didMoveNotification,
+            object: statusWindow
+        )
+        center.addObserver(
+            self,
+            selector: #selector(sourceGeometryDidChange(_:)),
+            name: NSWindow.didResizeNotification,
+            object: statusWindow
+        )
+        center.addObserver(
+            self,
+            selector: #selector(sourceGeometryDidChange(_:)),
+            name: NSWindow.didChangeScreenNotification,
+            object: statusWindow
+        )
     }
 
     private var toolTip: String {
@@ -287,9 +524,91 @@ final class RunnerStatusItemController: NSObject {
 }
 
 @MainActor
-private final class PassthroughImageView: NSImageView {
+private final class RunnerSpriteView: NSView {
+    private let tintLayer = CALayer()
+    private let maskLayer = CALayer()
+    private var spriteSize = NSSize.zero
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        maskLayer.magnificationFilter = .nearest
+        maskLayer.minificationFilter = .nearest
+        maskLayer.contentsGravity = .resize
+        tintLayer.mask = maskLayer
+        layer?.addSublayer(tintLayer)
+        updateTintColor()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func display(_ image: NSImage) {
+        guard let representation = image.representations
+            .compactMap({ $0 as? NSBitmapImageRep })
+            .first,
+              let contents = representation.cgImage
+        else {
+            return
+        }
+
+        spriteSize = image.size
+        updateLayerFrames()
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.contents = contents
+        maskLayer.contentsScale = max(
+            CGFloat(contents.width) / max(image.size.width, 1),
+            CGFloat(contents.height) / max(image.size.height, 1)
+        )
+        CATransaction.commit()
+    }
+
+    override func layout() {
+        super.layout()
+        updateLayerFrames()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateTintColor()
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+
+    private func updateLayerFrames() {
+        let size = NSSize(
+            width: min(spriteSize.width, bounds.width),
+            height: min(spriteSize.height, bounds.height)
+        )
+        let frame = NSRect(
+            x: (bounds.width - size.width) / 2,
+            y: (bounds.height - size.height) / 2,
+            width: size.width,
+            height: size.height
+        ).integral
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tintLayer.frame = frame
+        maskLayer.frame = tintLayer.bounds
+        CATransaction.commit()
+    }
+
+    private func updateTintColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            tintLayer.backgroundColor = NSColor.labelColor.cgColor
+            CATransaction.commit()
+        }
     }
 }
 
