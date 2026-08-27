@@ -8,15 +8,7 @@ final class RunnerStatusItemController: NSObject {
 
     private weak var manager: RunnerManager?
     private let statusItem: NSStatusItem
-    private var spriteWindows: [NSNumber: NSWindow] = [:]
-    private var spriteViews: [NSNumber: RunnerSpriteView] = [:]
-    private weak var observedStatusWindow: NSWindow?
-    private var currentImage: NSImage?
-    private var stableRightInset: CGFloat?
-    private var stableTopInset: CGFloat?
-    private var spaceRefreshWorkItem: DispatchWorkItem?
-    private var spaceRefreshGeneration = 0
-    private var suppressVisibilityRefresh = false
+    private let imageView: RunnerStatusItemView
     private var frameIndex = 0
     private var launchAtLoginItem: NSMenuItem?
     private var openLoginItemsSettingsItem: NSMenuItem?
@@ -28,16 +20,13 @@ final class RunnerStatusItemController: NSObject {
         statusItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.variableLength
         )
+        imageView = RunnerStatusItemView(frame: .zero)
         super.init()
 
-        configureSpriteView()
+        configureStatusItemButton()
         updateImage()
         updateToolTip()
         rebuildMenu()
-
-        DispatchQueue.main.async { [weak self] in
-            self?.updateSpriteWindowFrames()
-        }
     }
 
     func apply(_ configuration: RunnerConfiguration) {
@@ -161,15 +150,6 @@ final class RunnerStatusItemController: NSObject {
     }
 
     func invalidate() {
-        spaceRefreshWorkItem?.cancel()
-        spaceRefreshWorkItem = nil
-        NotificationCenter.default.removeObserver(self)
-        NSWorkspace.shared.notificationCenter.removeObserver(self)
-        for window in spriteWindows.values {
-            window.orderOut(nil)
-        }
-        spriteWindows.removeAll()
-        spriteViews.removeAll()
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -179,18 +159,14 @@ final class RunnerStatusItemController: NSObject {
         }
 
         frameIndex %= frames.count
-        let image = frames[frameIndex]
-        currentImage = image
-        for spriteView in spriteViews.values {
-            spriteView.display(image)
-        }
+        imageView.display(frames[frameIndex])
     }
 
     private func updateToolTip() {
         statusItem.button?.toolTip = toolTip
     }
 
-    private func configureSpriteView() {
+    private func configureStatusItemButton() {
         guard let button = statusItem.button else {
             return
         }
@@ -200,26 +176,14 @@ final class RunnerStatusItemController: NSObject {
         button.imagePosition = .noImage
         button.title = ""
 
-        button.postsFrameChangedNotifications = true
-        let center = NotificationCenter.default
-        center.addObserver(
-            self,
-            selector: #selector(sourceGeometryDidChange(_:)),
-            name: NSView.frameDidChangeNotification,
-            object: button
-        )
-        center.addObserver(
-            self,
-            selector: #selector(sourceGeometryDidChange(_:)),
-            name: NSApplication.didChangeScreenParametersNotification,
-            object: nil
-        )
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
-            selector: #selector(sourceGeometryDidChange(_:)),
-            name: NSWorkspace.activeSpaceDidChangeNotification,
-            object: nil
-        )
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(imageView)
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: button.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+        ])
     }
 
     private func updateStatusItemLength() {
@@ -227,248 +191,6 @@ final class RunnerStatusItemController: NSObject {
             .map(\.size.width)
             .max() ?? NSStatusItem.squareLength
         statusItem.length = max(NSStatusItem.squareLength, imageWidth + 4)
-
-        DispatchQueue.main.async { [weak self] in
-            self?.updateSpriteWindowFrames()
-        }
-    }
-
-    @objc
-    private func sourceGeometryDidChange(_ notification: Notification) {
-        if notification.name == NSWorkspace.activeSpaceDidChangeNotification {
-            suppressVisibilityRefresh = true
-            updateSpriteWindowFrames(updateVisibility: false)
-            scheduleSpaceRefresh()
-            return
-        }
-
-        updateSpriteWindowFrames(updateVisibility: !suppressVisibilityRefresh)
-    }
-
-    private func scheduleSpaceRefresh() {
-        spaceRefreshWorkItem?.cancel()
-        spaceRefreshGeneration += 1
-        let generation = spaceRefreshGeneration
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self,
-                  self.spaceRefreshGeneration == generation
-            else {
-                return
-            }
-            self.suppressVisibilityRefresh = false
-            self.updateSpriteWindowFrames()
-        }
-        spaceRefreshWorkItem = workItem
-        // Window Server visibility can lag the active-Space notification.
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + 0.25,
-            execute: workItem
-        )
-    }
-
-    private func updateSpriteWindowFrames(updateVisibility: Bool = true) {
-        guard let button = statusItem.button,
-              let statusWindow = button.window
-        else {
-            return
-        }
-
-        observeStatusWindowIfNeeded(statusWindow)
-        let frameInWindow = button.convert(button.bounds, to: nil)
-        let sourceFrame = statusWindow.convertToScreen(frameInWindow)
-        if let sourceScreen = NSScreen.screens.first(where: {
-            $0.frame.contains(sourceFrame)
-        }) ?? statusWindow.screen,
-           sourceScreen.frame.contains(sourceFrame) {
-            let rightInset = sourceScreen.frame.maxX - sourceFrame.maxX
-            let topInset = sourceScreen.frame.maxY - sourceFrame.maxY
-            let maximumTopInset = NSStatusBar.system.thickness
-
-            if rightInset >= 0,
-               topInset >= 0,
-               topInset <= maximumTopInset {
-                stableRightInset = rightInset
-                stableTopInset = topInset
-            }
-        }
-
-        guard let rightInset = stableRightInset,
-              let topInset = stableTopInset
-        else {
-            return
-        }
-        let visibleMenuBarScreens = updateVisibility
-            ? visibleMenuBarScreenNumbers()
-            : nil
-        var activeScreenNumbers = Set<NSNumber>()
-
-        for screen in NSScreen.screens {
-            guard let screenNumber = screen.deviceDescription[
-                NSDeviceDescriptionKey("NSScreenNumber")
-            ] as? NSNumber else {
-                continue
-            }
-
-            activeScreenNumbers.insert(screenNumber)
-            let targetFrame = NSRect(
-                x: screen.frame.maxX - rightInset - sourceFrame.width,
-                y: screen.frame.maxY - topInset - sourceFrame.height,
-                width: sourceFrame.width,
-                height: sourceFrame.height
-            )
-            let (window, spriteView) = spriteWindow(
-                for: screenNumber,
-                appearance: button.effectiveAppearance
-            )
-
-            window.setFrame(targetFrame, display: false)
-            if let currentImage {
-                spriteView.display(currentImage)
-            }
-            if visibleMenuBarScreens?.contains(screenNumber) == true,
-               !window.isVisible {
-                window.orderFrontRegardless()
-            } else if visibleMenuBarScreens?.contains(screenNumber) == false,
-                      window.isOnActiveSpace,
-                      window.isVisible {
-                window.orderOut(nil)
-            }
-        }
-
-        let removedScreenNumbers = Set(spriteWindows.keys)
-            .subtracting(activeScreenNumbers)
-        for screenNumber in removedScreenNumbers {
-            spriteWindows.removeValue(forKey: screenNumber)?.orderOut(nil)
-            spriteViews.removeValue(forKey: screenNumber)
-        }
-    }
-
-    private func spriteWindow(
-        for screenNumber: NSNumber,
-        appearance: NSAppearance
-    ) -> (NSWindow, RunnerSpriteView) {
-        if let window = spriteWindows[screenNumber],
-           let spriteView = spriteViews[screenNumber] {
-            window.appearance = appearance
-            return (window, spriteView)
-        }
-
-        let spriteView = RunnerSpriteView(frame: .zero)
-        spriteView.autoresizingMask = [.width, .height]
-        let window = NSWindow(
-            contentRect: .zero,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-        window.appearance = appearance
-        window.backgroundColor = .clear
-        // Transient windows move with their Space instead of lingering over it.
-        window.collectionBehavior = [
-            .canJoinAllSpaces,
-            .ignoresCycle,
-            .transient,
-        ]
-        window.contentView = spriteView
-        window.hasShadow = false
-        window.ignoresMouseEvents = true
-        window.isOpaque = false
-        window.isReleasedWhenClosed = false
-        window.level = NSWindow.Level(
-            rawValue: NSWindow.Level.statusBar.rawValue + 1
-        )
-
-        spriteWindows[screenNumber] = window
-        spriteViews[screenNumber] = spriteView
-        return (window, spriteView)
-    }
-
-    private func visibleMenuBarScreenNumbers() -> Set<NSNumber> {
-        guard let windowList = CGWindowListCopyWindowInfo(
-            .optionOnScreenOnly,
-            kCGNullWindowID
-        ) as? [[String: Any]] else {
-            return []
-        }
-
-        let menuBarFrames = windowList.compactMap { window -> CGRect? in
-            guard window[kCGWindowLayer as String] as? Int
-                    == NSWindow.Level.mainMenu.rawValue,
-                  let bounds = window[kCGWindowBounds as String]
-            else {
-                return nil
-            }
-
-            return CGRect(dictionaryRepresentation: bounds as! CFDictionary)
-        }
-
-        return Set(NSScreen.screens.compactMap { screen -> NSNumber? in
-            guard let screenNumber = screenNumber(for: screen) else {
-                return nil
-            }
-
-            let displayBounds = CGDisplayBounds(
-                CGDirectDisplayID(screenNumber.uint32Value)
-            )
-            let hasVisibleMenuBar = menuBarFrames.contains { menuBarFrame in
-                abs(menuBarFrame.minX - displayBounds.minX) < 1
-                    && abs(menuBarFrame.minY - displayBounds.minY) < 1
-                    && abs(menuBarFrame.width - displayBounds.width) < 1
-                    && menuBarFrame.height <= 64
-            }
-            return hasVisibleMenuBar ? screenNumber : nil
-        })
-    }
-
-    private func screenNumber(for screen: NSScreen) -> NSNumber? {
-        screen.deviceDescription[
-            NSDeviceDescriptionKey("NSScreenNumber")
-        ] as? NSNumber
-    }
-
-    private func observeStatusWindowIfNeeded(_ statusWindow: NSWindow) {
-        guard observedStatusWindow !== statusWindow else {
-            return
-        }
-
-        let center = NotificationCenter.default
-        if let observedStatusWindow {
-            center.removeObserver(
-                self,
-                name: NSWindow.didMoveNotification,
-                object: observedStatusWindow
-            )
-            center.removeObserver(
-                self,
-                name: NSWindow.didResizeNotification,
-                object: observedStatusWindow
-            )
-            center.removeObserver(
-                self,
-                name: NSWindow.didChangeScreenNotification,
-                object: observedStatusWindow
-            )
-        }
-
-        observedStatusWindow = statusWindow
-        center.addObserver(
-            self,
-            selector: #selector(sourceGeometryDidChange(_:)),
-            name: NSWindow.didMoveNotification,
-            object: statusWindow
-        )
-        center.addObserver(
-            self,
-            selector: #selector(sourceGeometryDidChange(_:)),
-            name: NSWindow.didResizeNotification,
-            object: statusWindow
-        )
-        center.addObserver(
-            self,
-            selector: #selector(sourceGeometryDidChange(_:)),
-            name: NSWindow.didChangeScreenNotification,
-            object: statusWindow
-        )
     }
 
     private var toolTip: String {
@@ -563,7 +285,7 @@ final class RunnerStatusItemController: NSObject {
 }
 
 @MainActor
-private final class RunnerSpriteView: NSView {
+private final class RunnerStatusItemView: NSView {
     private let tintLayer = CALayer()
     private let maskLayer = CALayer()
     private var spriteSize = NSSize.zero
@@ -595,8 +317,11 @@ private final class RunnerSpriteView: NSView {
             return
         }
 
-        spriteSize = image.size
-        updateLayerFrames()
+        // Update the mask directly so AppKit does not rasterize the status item image each frame.
+        if spriteSize != image.size {
+            spriteSize = image.size
+            updateLayerFrames()
+        }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
