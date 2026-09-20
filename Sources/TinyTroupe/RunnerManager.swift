@@ -17,9 +17,11 @@ final class RunnerManager: NSObject {
             for: ProstrationFrames.all,
             logicalPixelSize: ProstrationFrames.logicalPixelSize
         )
+        let frogJumpFrames = RunnerSpriteRenderer.images(for: FrogJumpFrames.all)
         frameSets = [
             .pixelCat: RunnerFrameSet(frames: pixelCatFrames),
             .prostration: RunnerFrameSet(frames: prostrationFrames),
+            .frogJump: RunnerFrameSet(frames: frogJumpFrames),
         ]
 
         super.init()

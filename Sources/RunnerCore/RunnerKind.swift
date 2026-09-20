@@ -1,6 +1,7 @@
 public enum RunnerKind: String, CaseIterable, Codable, Identifiable, Sendable {
     case pixelCat
     case prostration = "bowing" // Keep settings written by version 1.5 readable.
+    case frogJump
 
     public var id: String {
         rawValue
@@ -12,6 +13,8 @@ public enum RunnerKind: String, CaseIterable, Codable, Identifiable, Sendable {
             "像素猫"
         case .prostration:
             "日式跪拜"
+        case .frogJump:
+            "青蛙跳"
         }
     }
 }
