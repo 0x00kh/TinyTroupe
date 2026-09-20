@@ -23,10 +23,11 @@ final class RunnerFramesTests: XCTestCase {
         XCTAssertEqual(foreheadDown.maxY, ProstrationFrames.height - 2)
     }
 
-    func testRunnerKindsIncludePixelCatAndProstration() {
-        XCTAssertEqual(RunnerKind.allCases, [.pixelCat, .prostration])
+    func testRunnerKindsIncludeAllSupportedAnimations() {
+        XCTAssertEqual(RunnerKind.allCases, [.pixelCat, .prostration, .frogJump])
         XCTAssertEqual(RunnerKind.pixelCat.displayName, "像素猫")
         XCTAssertEqual(RunnerKind.prostration.displayName, "日式跪拜")
+        XCTAssertEqual(RunnerKind.frogJump.displayName, "青蛙跳")
         XCTAssertEqual(RunnerKind.prostration.rawValue, "bowing")
     }
 
